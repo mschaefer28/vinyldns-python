@@ -12,6 +12,7 @@ function usage {
     printf "\t-b, --bump: which segment to bump: major | minor | patch\n"
     printf "\t-p, --production: use real pypi instead of test pypi (test is default)\n"
     printf "\t-k, --key-id: the key id to use to sign the artifacts\n"
+    printf "\t-r, --remote: the git remote name to push to (required for production)\n"
 }
 
 function check_command {
@@ -50,6 +51,7 @@ function check_gpg_key {
 RELEASE_URL="--repository-url https://test.pypi.org/legacy/"
 KEY_ID=
 VERSION_SEGMENT="patch"
+RELEASE_REMOTE=
 
 while [ "$1" != "" ]; do
     case "$1" in
@@ -62,6 +64,10 @@ while [ "$1" != "" ]; do
             ;;
         -b | --bump )
             VERSION_SEGMENT="$2"
+            shift
+            ;;
+        -r | --remote )
+            RELEASE_REMOTE="$2"
             shift
             ;;
         --)              # End of all options.
@@ -80,6 +86,13 @@ done
 
 if [ -z "$KEY_ID" ]; then
     echo "ERROR: You must specify a GPG KEY ID to use for signing artifacts" >&2
+    usage
+    exit 1
+fi
+
+# Check that remote is specified for production releases
+if [ -z "${RELEASE_URL}" ] && [ -z "$RELEASE_REMOTE" ]; then
+    echo "ERROR: You must specify a remote name with --remote for production releases" >&2
     usage
     exit 1
 fi
@@ -117,8 +130,9 @@ echo "✓ Python $PYTHON_VERSION"
 echo "Checking required Python packages..."
 check_python_module setuptools
 check_python_module wheel
-check_python_module bumpversion
+check_command bumpversion
 check_python_module twine
+check_python_module build
 echo "✓ All required Python packages are installed"
 
 # Check that Git working directory is clean
@@ -130,6 +144,18 @@ echo "✓ Git working directory is clean"
 echo "Checking GPG key..."
 check_gpg_key "$KEY_ID"
 echo "✓ GPG key '$KEY_ID' found"
+
+# Check that remote exists (only for production releases)
+if [ -n "$RELEASE_REMOTE" ]; then
+    echo "Checking Git remote '$RELEASE_REMOTE'..."
+    if ! git remote get-url "$RELEASE_REMOTE" &> /dev/null; then
+        echo "ERROR: Git remote '$RELEASE_REMOTE' does not exist" >&2
+        echo "Available remotes:" >&2
+        git remote -v >&2
+        exit 1
+    fi
+    echo "✓ Git remote '$RELEASE_REMOTE' exists"
+fi
 
 echo "=== Preflight checks passed ==="
 echo ""
@@ -202,10 +228,12 @@ if [ -z "${RELEASE_URL}" ]; then
     CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
     
     # Push the commit
-    git push origin "${CURRENT_BRANCH}"
-    
+    git push "$RELEASE_REMOTE" "${CURRENT_BRANCH}"
+
     # Push the tags
-    git push origin --tags
+    git push --atomic "$RELEASE_REMOTE" \
+          "HEAD:refs/heads/${CURRENT_BRANCH}" \
+          "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
     
     echo "✓ Git commit and tags pushed successfully"
 else
