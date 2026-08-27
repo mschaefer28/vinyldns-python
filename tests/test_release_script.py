@@ -233,20 +233,20 @@ def test_failed_build_does_not_sign_upload_or_push(tmp_path):
 
     # 3. No GPG signing invocation (--detach-sign)
     # Note: --list-secret-keys is expected for preflight check
-    gpg_sign_commands = [line for line in command_log.split('\n') 
+    gpg_sign_commands = [line for line in command_log.split('\n')
                          if 'gpg' in line and '--detach-sign' in line]
     assert len(gpg_sign_commands) == 0, \
         f"Expected no GPG signing, but found:\n{chr(10).join(gpg_sign_commands)}"
 
     # 4. No twine check or upload invocation
-    twine_commands = [line for line in command_log.split('\n') 
+    twine_commands = [line for line in command_log.split('\n')
                       if 'python3 -m twine' in line]
     assert len(twine_commands) == 0, \
         f"Expected no twine invocations, but found:\n{chr(10).join(twine_commands)}"
 
     # 5. No git push invocation
     # Note: git status and other preflight calls are expected
-    git_push_commands = [line for line in command_log.split('\n') 
+    git_push_commands = [line for line in command_log.split('\n')
                          if 'git push' in line]
     assert len(git_push_commands) == 0, \
         f"Expected no 'git push', but found:\n{chr(10).join(git_push_commands)}"
