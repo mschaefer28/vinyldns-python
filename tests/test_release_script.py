@@ -170,44 +170,44 @@ def test_failed_build_does_not_sign_upload_or_push(tmp_path):
     # Setup test directory structure
     test_dir = tmp_path / "test_release_script"
     test_dir.mkdir()
-    
+
     # Create bin directory for fake executables
     bin_dir = test_dir / "bin"
     bin_dir.mkdir()
-    
+
     # Create shared log file
     log_file = test_dir / "command.log"
     log_file.touch()
-    
+
     # Create fake executables
     create_fake_python3(bin_dir, log_file)
     create_fake_git(bin_dir, log_file, test_dir)
     create_fake_gpg(bin_dir, log_file)
     create_fake_bumpversion(bin_dir, log_file, test_dir)
-    
+
     # Copy release.sh to test directory
     project_root = Path(__file__).parent.parent
     release_script = project_root / "release.sh"
     test_release_script = test_dir / "release.sh"
     shutil.copy(release_script, test_release_script)
     test_release_script.chmod(0o755)
-    
+
     # Copy required files for the script
     for file_name in ["setup.py", "setup.cfg", "README.md"]:
         src_file = project_root / file_name
         if src_file.exists():
             shutil.copy(src_file, test_dir / file_name)
-    
+
     # Copy src directory structure (required for build)
     src_dir = project_root / "src"
     if src_dir.exists():
         shutil.copytree(src_dir, test_dir / "src")
-    
+
     # Prepare environment
     env = os.environ.copy()
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
     env["RELEASE_TEST_LOG"] = str(log_file)
-    
+
     # Run release.sh with arguments that trigger production path
     # Using test mode (no --production) to avoid git push requirement during preflight
     result = subprocess.run(
@@ -218,23 +218,18 @@ def test_failed_build_does_not_sign_upload_or_push(tmp_path):
         text=True
     )
 
-
     # Read the command log
     command_log = log_file.read_text()
 
-
     # Assertions:
-
 
     # 1. Script should return nonzero exit code (build failed)
     assert result.returncode != 0, \
         f"Expected nonzero exit code, got {result.returncode}"
 
-
     # 2. Build was attempted
     assert "python3 -m build" in command_log, \
         f"Expected 'python3 -m build' in log, but found:\n{command_log}"
-
 
     # 3. No GPG signing invocation (--detach-sign)
     # Note: --list-secret-keys is expected for preflight check
@@ -243,13 +238,11 @@ def test_failed_build_does_not_sign_upload_or_push(tmp_path):
     assert len(gpg_sign_commands) == 0, \
         f"Expected no GPG signing, but found:\n{chr(10).join(gpg_sign_commands)}"
 
-
     # 4. No twine check or upload invocation
     twine_commands = [line for line in command_log.split('\n') 
                       if 'python3 -m twine' in line]
     assert len(twine_commands) == 0, \
         f"Expected no twine invocations, but found:\n{chr(10).join(twine_commands)}"
-
 
     # 5. No git push invocation
     # Note: git status and other preflight calls are expected
@@ -257,7 +250,6 @@ def test_failed_build_does_not_sign_upload_or_push(tmp_path):
                          if 'git push' in line]
     assert len(git_push_commands) == 0, \
         f"Expected no 'git push', but found:\n{chr(10).join(git_push_commands)}"
-
 
     # 6. Script does not print successful-completion message
     assert "Release completed successfully" not in result.stdout, \
