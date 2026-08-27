@@ -53,35 +53,50 @@ KEY_ID=
 VERSION_SEGMENT="patch"
 RELEASE_REMOTE=
 
-while [ "$1" != "" ]; do
+while [ $# -gt 0 ]; do
     case "$1" in
         -p | --production )
             RELEASE_URL=""
             ;;
         -k | --key-id )
+            if [ $# -lt 2 ]; then
+                echo "ERROR: --key-id requires a value" >&2
+                usage
+                exit 1
+            fi
             KEY_ID="$2"
-            shift
+            shift 2
             ;;
         -b | --bump )
+            if [ $# -lt 2 ]; then
+                echo "ERROR: --bump requires a value" >&2
+                usage
+                exit 1
+            fi
             VERSION_SEGMENT="$2"
-            shift
+            shift 2
             ;;
         -r | --remote )
+            if [ $# -lt 2 ]; then
+                echo "ERROR: --remote requires a value" >&2
+                usage
+                exit 1
+            fi
             RELEASE_REMOTE="$2"
-            shift
+            shift 2
             ;;
         --)              # End of all options.
             shift
             break
             ;;
         -?*)
-            printf 'WARN: Unknown option (ignored): %s\n' "$1" >&2
-            shift
+            echo "ERROR: Unknown option: $1" >&2
+            usage
+            exit 1
             ;;
         *)               # Default case: If no more options then break out of the loop.
             break
     esac
-    shift
 done
 
 if [ -z "$KEY_ID" ]; then
@@ -110,6 +125,7 @@ echo "Checking required commands..."
 check_command git
 check_command python3
 check_command gpg
+check_command bumpversion
 
 # Check Python version (requires 3.11+ per setup.py)
 echo "Checking Python version..."
@@ -130,7 +146,6 @@ echo "✓ Python $PYTHON_VERSION"
 echo "Checking required Python packages..."
 check_python_module setuptools
 check_python_module wheel
-check_command bumpversion
 check_python_module twine
 check_python_module build
 echo "✓ All required Python packages are installed"
@@ -224,11 +239,9 @@ echo "✓ Upload completed successfully"
 if [ -z "${RELEASE_URL}" ]; then
     echo "Pushing Git commit and tags to remote..."
     
-    # Get current branch name
-    CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-    
-    # Push the commit
-    git push "$RELEASE_REMOTE" "${CURRENT_BRANCH}"
+    # Get current branch name and release tag
+    CURRENT_BRANCH=$(git symbolic-ref --short HEAD)
+    RELEASE_TAG=$(git describe --exact-match --tags HEAD)
 
     # Push the tags
     git push --atomic "$RELEASE_REMOTE" \
