@@ -17,10 +17,11 @@ import shutil
 import subprocess
 from pathlib import Path
 
+
 def create_fake_python3(bin_dir: Path, log_file: Path) -> None:
     """Create a fake python3 executable that handles version probes, import checks,
     and records -m build and -m twine invocations."""
-    
+
     fake_python = bin_dir / "python3"
     fake_python.write_text(f'''#!/usr/bin/env bash
 set -e
@@ -60,9 +61,10 @@ exit 1
 ''', encoding='utf-8')
     fake_python.chmod(0o755)
 
+
 def create_fake_git(bin_dir: Path, log_file: Path, test_dir: Path) -> None:
     """Create a fake git executable that handles status, remote, and push commands."""
-    
+
     fake_git = bin_dir / "git"
     fake_git.write_text(f'''#!/usr/bin/env bash
 set -e
@@ -114,9 +116,10 @@ exit 0
 ''', encoding='utf-8')
     fake_git.chmod(0o755)
 
+
 def create_fake_gpg(bin_dir: Path, log_file: Path) -> None:
     """Create a fake gpg executable that handles key checks and signing."""
-    
+
     fake_gpg = bin_dir / "gpg"
     fake_gpg.write_text(f'''#!/usr/bin/env bash
 set -e
@@ -142,9 +145,10 @@ exit 0
 ''', encoding='utf-8')
     fake_gpg.chmod(0o755)
 
+
 def create_fake_bumpversion(bin_dir: Path, log_file: Path, test_dir: Path) -> None:
     """Create a fake bumpversion executable that simulates version bumping."""
-    
+
     fake_bumpversion = bin_dir / "bumpversion"
     fake_bumpversion.write_text(f'''#!/usr/bin/env bash
 set -e
@@ -159,8 +163,10 @@ exit 0
 ''', encoding='utf-8')
     fake_bumpversion.chmod(0o755)
 
+
 def test_failed_build_does_not_sign_upload_or_push(tmp_path):
     """Test that when python3 -m build fails, the script does not sign, upload, or push."""
+
     # Setup test directory structure
     test_dir = tmp_path / "test_release_script"
     test_dir.mkdir()
@@ -211,40 +217,48 @@ def test_failed_build_does_not_sign_upload_or_push(tmp_path):
         capture_output=True,
         text=True
     )
-    
+
+
     # Read the command log
     command_log = log_file.read_text()
-    
+
+
     # Assertions:
-    
+
+
     # 1. Script should return nonzero exit code (build failed)
     assert result.returncode != 0, \
         f"Expected nonzero exit code, got {result.returncode}"
-    
+
+
     # 2. Build was attempted
     assert "python3 -m build" in command_log, \
         f"Expected 'python3 -m build' in log, but found:\n{command_log}"
-    
+
+
     # 3. No GPG signing invocation (--detach-sign)
     # Note: --list-secret-keys is expected for preflight check
     gpg_sign_commands = [line for line in command_log.split('\n') 
                          if 'gpg' in line and '--detach-sign' in line]
     assert len(gpg_sign_commands) == 0, \
         f"Expected no GPG signing, but found:\n{chr(10).join(gpg_sign_commands)}"
-    
+
+
     # 4. No twine check or upload invocation
     twine_commands = [line for line in command_log.split('\n') 
                       if 'python3 -m twine' in line]
     assert len(twine_commands) == 0, \
         f"Expected no twine invocations, but found:\n{chr(10).join(twine_commands)}"
-    
+
+
     # 5. No git push invocation
     # Note: git status and other preflight calls are expected
     git_push_commands = [line for line in command_log.split('\n') 
                          if 'git push' in line]
     assert len(git_push_commands) == 0, \
         f"Expected no 'git push', but found:\n{chr(10).join(git_push_commands)}"
-    
+
+
     # 6. Script does not print successful-completion message
     assert "Release completed successfully" not in result.stdout, \
         f"Expected no success message, but stdout contains:\n{result.stdout}"
@@ -252,4 +266,3 @@ def test_failed_build_does_not_sign_upload_or_push(tmp_path):
         f"Expected no success message, but stderr contains:\n{result.stderr}"
     temp_directory = tmp_path / "test_release"
     temp_directory.mkdir()
-
