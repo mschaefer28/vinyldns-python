@@ -82,13 +82,14 @@ exit 1
     fake_python.chmod(0o755)
 
 
-def create_fake_git(bin_dir: Path, log_file: Path, test_dir: Path) -> None:
+def create_fake_git(bin_dir: Path, log_file: Path, release_test_fail) -> None:
     """Create a fake git executable that handles status, remote, and push commands."""
 
     fake_git = bin_dir / "git"
     fake_git.write_text(f'''#!/usr/bin/env bash
 
 LOG_FILE="{log_file}"
+RELEASE_TEST_FAIL={release_test_fail}
 
 # Log all invocations
 echo "git $@" >> "$LOG_FILE"
@@ -204,7 +205,7 @@ def test_failed_build_does_not_sign_upload_or_push(tmp_path):
     log_file.touch()
 
     # Create fake executables
-    create_fake_python3(bin_dir, log_file)
+    create_fake_python3(bin_dir, log_file,'build')
     create_fake_git(bin_dir, log_file, test_dir)
     create_fake_gpg(bin_dir, log_file)
     create_fake_bumpversion(bin_dir, log_file, test_dir)
