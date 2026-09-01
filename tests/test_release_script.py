@@ -18,7 +18,7 @@ import subprocess
 from pathlib import Path
 
 
-def create_fake_python3(bin_dir: Path, log_file: Path) -> None:
+def create_fake_python3(bin_dir: Path, log_file: Path, release_test_fail) -> None:
     """Create a fake python3 executable that handles version probes, import checks,
     and records -m build and -m twine invocations."""
 
@@ -26,6 +26,7 @@ def create_fake_python3(bin_dir: Path, log_file: Path) -> None:
     fake_python.write_text(f'''#!/usr/bin/env bash
 set -e
 
+RELEASE_TEST_FAIL={release_test_fail}
 LOG_FILE="{log_file}"
 
 # Log all invocations
@@ -42,16 +43,36 @@ if [[ "$1" == "-c" ]] && [[ "$2" == *"import "* ]]; then
     exit 0
 fi
 
-# Handle -m build - return failure for this test
-if [[ "$1" == "-m" ]] && [[ "$2" == "build" ]]; then
-    echo "ERROR: Build failed" >&2
-    exit 1
+# Handle -m build 
+
+if [[ "$RELEASE_TEST_FAIL" == "build" ]]; then
+    if [[ "$1" == "-m" ]] && [[ "$2" == "build" ]]; then
+        echo "ERROR: Build failed" >&2
+        exit 1
+    fi
+else
+    if [[ "$1" == "-m" ]] && [[ "$2" == "build" ]]; then
+    echo "SUCCESS: Build succeeded" >&2
+        exit 0
+    fi
 fi
 
-# Handle -m twine - should not be called in this test
-if [[ "$1" == "-m" ]] && [[ "$2" == "twine" ]]; then
-    echo "ERROR: twine should not be called after build failure" >&2
-    exit 1
+# Handle -m twine 
+if [[ "$RELEASE_TEST_FAIL" == "twine-check" ]]; then
+    if [[ "$1" == "-m" ]] && [[ "$2" == "twine" ]]; then
+        echo "ERROR: twine check error" >&2
+        exit 1
+    fi
+elif [[ "$RELEASE_TEST_FAIL" == "build" ]]; then
+    if [[ "$1" == "-m" ]] && [[ "$2" == "twine" ]]; then
+        echo "ERROR: Twine check should not happen after failed build >&2
+        exit 1
+    fi
+else
+    if [[ "$1" == "-m" ]] && [[ "$2" == "twine" ]]; then
+        echo "SUCCESS: Twine check passed" >&2
+        exit 0
+    fi
 fi
 
 # Default: unknown invocation
@@ -223,6 +244,13 @@ def test_failed_build_does_not_sign_upload_or_push(tmp_path):
 
     # Read the command log
     command_log = log_file.read_text()
+
+    print("=== release.sh stdout ===")
+    print(result.stdout)
+    print("=== release.sh stderr ===")
+    print(result.stderr)
+    print("=== stub command log ===")
+    print(log_file.read_text())
 
     # Assertions:
 
