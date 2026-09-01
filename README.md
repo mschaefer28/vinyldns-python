@@ -7,7 +7,7 @@
 
 Production-ready Python client for [VinylDNS](https://www.vinyldns.io/)
 
-Direct support requests and bug reports to [GitHub Issues](https://github.com/vinyldns/vinyldns-python/issues). 
+Direct support requests and bug reports to [GitHub Issues](https://github.com/vinyldns/vinyldns-python/issues).
 
 ## Requirements
 
@@ -23,8 +23,9 @@ pip install vinyldns-python
 
 To run, `pip install vinyldns-python` and then:
 
+**Option 1: Explicit credentials**
+
 ```python
->>> from vinyldns.client import VinylDNSClient
 from vinyldns.client import VinylDNSClient
 
 client = VinylDNSClient(
@@ -32,14 +33,26 @@ client = VinylDNSClient(
     "my-access-key",
     "my-secret-key"
 )
->>> local_client.list_zones()
->>>
->>> # Alternatively, configure authentication through environment variables:
->>> # - export VINYLDNS_API_URL
->>> # - export VINYLDNS_ACCESS_KEY_ID
->>> # - export VINYLDNS_SECRET_ACCESS_KEY
->>> from vinyldns.client import VinylDNSClient
->>> local_client = VinylDNSClient.from_env()
+
+# Use the client
+zones = client.list_zones()
+```
+**Option 2: Environment-based credentials**
+
+First, set the required environment variables:
+```bash
+export VINYLDNS_API_URL="https://vinyldns.example.com"
+export VINYLDNS_ACCESS_KEY_ID="my-access-key"
+export VINYLDNS_SECRET_ACCESS-KEY="my-secret-key"
+```
+
+Then in your python code:
+```python
+from vinyldns.client import VinylDNSClient
+client = VinylDNSClient.from_env()
+
+# Use the client
+zones = client.list_zones()
 ```
 
 ## Utilities
@@ -66,7 +79,7 @@ Install the package in editable mode with development dependencies:
 
 ```bash
 pip install -e .
-pip install tox pre-commit  # On Windows: .venv\Scripts\activate
+pip install tox pre-commit
 ```
 
 Install pre-commit hooks:
@@ -148,6 +161,8 @@ print(f"Deleted record set with change ID: {delete_change.id}")
 ```
 
 **Work with Groups**
+
+The following examples modify DNS data:
 ```python
 from vinyldns.membership import Group, User
 
@@ -181,32 +196,32 @@ for member in members.members:
 
 The following examples modify DNS data:
 ```python
-from vinyldns.batch_change import BatchChangeInput, AddChangeInput, DeleteChangeInput
+from vinyldns.batch_change import BatchChangeRequest, AddRecord, DeleteRecordSet
 
 # Create a batch change with multiple updates
-batch_input = BatchChangeInput(
+batch_request = BatchChangeRequest(
     comments="Update DNS records for new deployment",
     changes=[
-        AddChangeInput(
+        AddRecord(
             input_name="app.example.com.",
             type="A",
             ttl=300,
             record={"address": "192.0.2.100"}
         ),
-        AddChangeInput(
+        AddRecord(
             input_name="api.example.com.",
             type="CNAME",
             ttl=300,
             record={"cname": "app.example.com."}
         ),
-        DeleteChangeInput(
+        DeleteRecordSet(
             input_name="old-app.example.com.",
             type="A"
         )
     ]
 )
 
-batch_change = client.create_batch_change(batch_input)
+batch_change = client.create_batch_change(batch_request)
 print(f"Batch change created: {batch_change.id}")
 print(f"Status: {batch_change.status}")
 
@@ -249,7 +264,7 @@ This workflow requires Docker to be installed and running.
 **Running a full build**
 
 When you are finished writing your code you will want to run everything including linters.  The
-simplest way to do this is to run `tox -e check,py36`, which will run static checks and run unit tests.
+simplest way to do this is to run `tox -e check,py3`, which will run static checks and run unit tests.
 
 If you see any failures / warnings, correct them until `tox` runs successfully.
 
@@ -258,9 +273,34 @@ read the [tox docs](https://tox.readthedocs.io/en/latest/index.html).
 
 
 ## Local Development
-See the [quickstart](https://github.com/vinyldns/vinyldns/blob/master/README.md#quickstart) in the
-VinylDNS api for details on how to start up a local instance of the api in docker. With that
-running, you can make requests with the following client details:
+
+The repository includes a self-contained Docker environment for local testing and development. This is the same environment used by the functional tests.
+
+**Starting the VinylDNS environment:**
+
+```bash
+bash ./docker/docker-up-vinyldns.sh
+```
+
+This starts VinylDNS API on `http://localhost:9000` along with MySQL and BIND9 dependencies.
+
+**Connecting to the local environment:**
 ```python
 local_client = VinylDNSClient("http://localhost:9000", "okAccessKey", "okSecretKey")
 ```
+
+**Stopping the environment:**
+
+```bash
+./docker/remove-vinyl-containers.sh
+```
+
+**Running tests against the local environment:**
+
+The functional tests automatically manage the Docker environment:
+
+```bash
+tox -e func_test
+```
+
+This will start the VinylDNS Docker environment, run all functional tests against it, and tear it down when complete.
