@@ -29,34 +29,33 @@ set -e
 LOG_FILE="{log_file}"
 
 # Log all invocations
-echo "python3 $*" >> "$LOG_FILE"
+echo "python3 $@" >> "$LOG_FILE"
 
 # Handle version check
-if [[ "$*" == *"sys.version_info"* ]]; then
+if [[ "$1" == "-c" ]] && [[ "$2" == *"sys.version_info"* ]]; then
     echo "3.11"
     exit 0
 fi
 
 # Handle import checks
-if [[ "$*" == "-c "* ]] && [[ "$*" == *"import "* ]]; then
-    # Extract module name - handle cases like "import setuptools"
+if [[ "$1" == "-c" ]] && [[ "$2" == *"import "* ]]; then
     exit 0
 fi
 
 # Handle -m build - return failure for this test
-if [[ "$*" == "-m build"* ]]; then
+if [[ "$1" == "-m" ]] && [[ "$2" == "build" ]]; then
     echo "ERROR: Build failed" >&2
     exit 1
 fi
 
 # Handle -m twine - should not be called in this test
-if [[ "$*" == "-m twine"* ]]; then
+if [[ "$1" == "-m" ]] && [[ "$2" == "twine" ]]; then
     echo "ERROR: twine should not be called after build failure" >&2
     exit 1
 fi
 
 # Default: unknown invocation
-echo "ERROR: Unknown python3 invocation: $*" >&2
+echo "ERROR: Unknown python3 invocation: $@" >&2
 exit 1
 ''', encoding='utf-8')
     fake_python.chmod(0o755)
@@ -67,12 +66,11 @@ def create_fake_git(bin_dir: Path, log_file: Path, test_dir: Path) -> None:
 
     fake_git = bin_dir / "git"
     fake_git.write_text(f'''#!/usr/bin/env bash
-set -e
 
 LOG_FILE="{log_file}"
 
 # Log all invocations
-echo "git $*" >> "$LOG_FILE"
+echo "git $@" >> "$LOG_FILE"
 
 case "$1" in
     status)
@@ -101,18 +99,21 @@ case "$1" in
         fi
         ;;
     describe)
-        if [[ "$*" == *"--exact-match"* ]] && [[ "$*" == *"--tags"* ]]; then
+        if [[ "$2" == "--exact-match" ]] && [[ "$3" == "--tags" ]]; then
             echo "v0.9.11"
             exit 0
         fi
         ;;
     push)
-        # This should NOT be called in this test
-        exit 0
+        # Forbidden operation - fail immediately
+        echo "ERROR: git push should not be called in this test" >&2
+        exit 1
         ;;
 esac
 
-exit 0
+# Default: unknown invocation
+echo "ERROR: Unknown git invocation: $@" >&2
+exit 1
 ''', encoding='utf-8')
     fake_git.chmod(0o755)
 
@@ -122,26 +123,28 @@ def create_fake_gpg(bin_dir: Path, log_file: Path) -> None:
 
     fake_gpg = bin_dir / "gpg"
     fake_gpg.write_text(f'''#!/usr/bin/env bash
-set -e
 
 LOG_FILE="{log_file}"
 
 # Log all invocations
-echo "gpg $*" >> "$LOG_FILE"
+echo "gpg $@" >> "$LOG_FILE"
 
 # Handle --list-secret-keys (preflight check)
-if [[ "$*" == *"--list-secret-keys"* ]]; then
+if [[ "$1" == "--list-secret-keys" ]]; then
     # Just succeed - key exists
     exit 0
 fi
 
 # Handle signing with --detach-sign
-if [[ "$*" == *"--detach-sign"* ]]; then
-    # This should NOT be called in this test (build failed)
-    exit 0
+if [[ "$2" == "-u" ]] && [[ "$4" == "--detach-sign" ]]; then
+    # Forbidden operation - fail immediately
+    echo "ERROR: gpg --detach-sign should not be called in this test (build failed)" >&2
+    exit 1
 fi
 
-exit 0
+# Default: unknown invocation
+echo "ERROR: Unknown gpg invocation: $@" >&2
+exit 1
 ''', encoding='utf-8')
     fake_gpg.chmod(0o755)
 
@@ -156,7 +159,7 @@ set -e
 LOG_FILE="{log_file}"
 
 # Log all invocations
-echo "bumpversion $*" >> "$LOG_FILE"
+echo "bumpversion $@" >> "$LOG_FILE"
 
 # Simulate successful version bump
 exit 0
@@ -208,8 +211,8 @@ def test_failed_build_does_not_sign_upload_or_push(tmp_path):
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
     env["RELEASE_TEST_LOG"] = str(log_file)
 
-    # Run release.sh with arguments that trigger production path
-    # Using test mode (no --production) to avoid git push requirement during preflight
+    # Run release.sh in test mode (TestPyPI, no --production flag)
+    # This avoids git push requirement during preflight
     result = subprocess.run(
         ["bash", str(test_release_script), "--key-id", "test-key-123"],
         cwd=test_dir,
@@ -256,5 +259,3 @@ def test_failed_build_does_not_sign_upload_or_push(tmp_path):
         f"Expected no success message, but stdout contains:\n{result.stdout}"
     assert "Release completed successfully" not in result.stderr, \
         f"Expected no success message, but stderr contains:\n{result.stderr}"
-    temp_directory = tmp_path / "test_release"
-    temp_directory.mkdir()
