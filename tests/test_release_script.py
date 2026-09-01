@@ -43,7 +43,7 @@ if [[ "$1" == "-c" ]] && [[ "$2" == *"import "* ]]; then
     exit 0
 fi
 
-# Handle -m build 
+# Handle -m build
 
 if [[ "$RELEASE_TEST_FAIL" == "build" ]]; then
     if [[ "$1" == "-m" ]] && [[ "$2" == "build" ]]; then
@@ -57,7 +57,7 @@ else
     fi
 fi
 
-# Handle -m twine 
+# Handle -m twine
 if [[ "$RELEASE_TEST_FAIL" == "twine-check" ]]; then
     if [[ "$1" == "-m" ]] && [[ "$2" == "twine" ]]; then
         echo "ERROR: twine check error" >&2
@@ -205,7 +205,7 @@ def test_failed_build_does_not_sign_upload_or_push(tmp_path):
     log_file.touch()
 
     # Create fake executables
-    create_fake_python3(bin_dir, log_file,'build')
+    create_fake_python3(bin_dir, log_file, 'build')
     create_fake_git(bin_dir, log_file, test_dir)
     create_fake_gpg(bin_dir, log_file)
     create_fake_bumpversion(bin_dir, log_file, test_dir)
