@@ -43,7 +43,7 @@ First, set the required environment variables:
 ```bash
 export VINYLDNS_API_URL="https://vinyldns.example.com"
 export VINYLDNS_ACCESS_KEY_ID="my-access-key"
-export VINYLDNS_SECRET_ACCESS-KEY="my-secret-key"
+export VINYLDNS_SECRET_ACCESS_KEY="my-secret-key"
 ```
 
 Then in your python code:
