@@ -52,7 +52,10 @@ if [[ "$RELEASE_TEST_FAIL" == "build" ]]; then
     fi
 else
     if [[ "$1" == "-m" ]] && [[ "$2" == "build" ]]; then
-    echo "SUCCESS: Build succeeded" >&2
+        mkdir -p dist
+        touch dist/vinyldns-python-0.9.11-py3-none-any.whl
+        touch dist/vinyldns-python-0.9.11.tar.gz
+        echo "SUCCESS: Build succeeded" >&2
         exit 0
     fi
 fi
@@ -65,7 +68,7 @@ if [[ "$RELEASE_TEST_FAIL" == "twine-check" ]]; then
     fi
 elif [[ "$RELEASE_TEST_FAIL" == "build" ]]; then
     if [[ "$1" == "-m" ]] && [[ "$2" == "twine" ]]; then
-        echo "ERROR: Twine check should not happen after failed build >&2
+        echo "ERROR: Twine check should not happen after failed build" >&2
         exit 1
     fi
 else
@@ -82,7 +85,7 @@ exit 1
     fake_python.chmod(0o755)
 
 
-def create_fake_git(bin_dir: Path, log_file: Path, release_test_fail) -> None:
+def create_fake_git(bin_dir: Path, log_file: Path,test_dir: Path, release_test_fail) -> None:
     """Create a fake git executable that handles status, remote, and push commands."""
 
     fake_git = bin_dir / "git"
@@ -140,13 +143,14 @@ exit 1
     fake_git.chmod(0o755)
 
 
-def create_fake_gpg(bin_dir: Path, log_file: Path) -> None:
+def create_fake_gpg(bin_dir: Path, log_file: Path, release_test_fail) -> None:
     """Create a fake gpg executable that handles key checks and signing."""
 
     fake_gpg = bin_dir / "gpg"
     fake_gpg.write_text(f'''#!/usr/bin/env bash
 
 LOG_FILE="{log_file}"
+RELEASE_TEST_FAIL={release_test_fail}
 
 # Log all invocations
 echo "gpg $@" >> "$LOG_FILE"
@@ -158,12 +162,25 @@ if [[ "$1" == "--list-secret-keys" ]]; then
 fi
 
 # Handle signing with --detach-sign
-if [[ "$2" == "-u" ]] && [[ "$4" == "--detach-sign" ]]; then
-    # Forbidden operation - fail immediately
-    echo "ERROR: gpg --detach-sign should not be called in this test (build failed)" >&2
-    exit 1
+if [[ "$RELEASE_TEST_FAIL" == "twine-check" ]] || [[ "$RELEASE_TEST_FAIL" == "build" ]]; then
+    if [[ "$2" == "-u" ]] && [[ "$4" == "--detach-sign" ]]; then
+        # Forbidden operation - fail immediately
+        echo "ERROR: gpg --detach-sign should not be called in this test (build/twine-check failed)" >&2
+        exit 1
+    fi
+elif [[ "$RELEASE_TEST_FAIL" == "gpg-sign" ]]; then
+    if [[ "$2" == "-u" ]] && [[ "$4" == "--detach-sign" ]]; then
+        # Force fail
+        echo "ERROR: gpg --detach-sign error" >&2
+        exit 1
+    fi
+else 
+    if [[ "$2" == "-u" ]] && [[ "$4" == "--detach-sign" ]]; then
+            # Success - sign the file
+            echo "SUCCESS: gpg --detach-sign" >&2
+            exit 0
+    fi
 fi
-
 # Default: unknown invocation
 echo "ERROR: Unknown gpg invocation: $@" >&2
 exit 1
@@ -189,7 +206,7 @@ exit 0
     fake_bumpversion.chmod(0o755)
 
 
-def test_failed_build_does_not_sign_upload_or_push(tmp_path):
+def run_release(tmp_path, fail_at):
     """Test that when python3 -m build fails, the script does not sign, upload, or push."""
 
     # Setup test directory structure
@@ -205,9 +222,9 @@ def test_failed_build_does_not_sign_upload_or_push(tmp_path):
     log_file.touch()
 
     # Create fake executables
-    create_fake_python3(bin_dir, log_file, 'build')
-    create_fake_git(bin_dir, log_file, test_dir)
-    create_fake_gpg(bin_dir, log_file)
+    create_fake_python3(bin_dir, log_file, fail_at)
+    create_fake_git(bin_dir, log_file, test_dir, fail_at)
+    create_fake_gpg(bin_dir, log_file, fail_at)
     create_fake_bumpversion(bin_dir, log_file, test_dir)
 
     # Copy release.sh to test directory
@@ -243,15 +260,20 @@ def test_failed_build_does_not_sign_upload_or_push(tmp_path):
         text=True
     )
 
-    # Read the command log
-    command_log = log_file.read_text()
-
     print("=== release.sh stdout ===")
     print(result.stdout)
     print("=== release.sh stderr ===")
     print(result.stderr)
     print("=== stub command log ===")
     print(log_file.read_text())
+
+    return result, log_file.read_text()
+
+
+def test_failed_build_stops_release(tmp_path):
+    """Test that when python3 -m build fails, the script stops and does not proceed."""
+    fail_at = 'build'
+    result, command_log = run_release(tmp_path, fail_at)
 
     # Assertions:
 
@@ -288,3 +310,98 @@ def test_failed_build_does_not_sign_upload_or_push(tmp_path):
         f"Expected no success message, but stdout contains:\n{result.stdout}"
     assert "Release completed successfully" not in result.stderr, \
         f"Expected no success message, but stderr contains:\n{result.stderr}"
+
+
+def test_failed_twine_check_stops_release(tmp_path):
+    """Test that when python3 -m build fails, the script stops and does not proceed."""
+    fail_at = 'twine-check'
+    result, command_log = run_release(tmp_path, fail_at)
+
+    # Assertions:
+
+    # 1. Script should return nonzero exit code (twine-check failed)
+    assert result.returncode != 0, \
+        f"Expected nonzero exit code, got {result.returncode}"
+
+    # 2. Twine check was attempted
+    assert "python3 -m twine check" in command_log, \
+        f"Expected 'python3 -m twine check' in log, but found:\n{command_log}"
+
+    # 3. No GPG signing invocation (--detach-sign)
+    # Note: --list-secret-keys is expected for preflight check
+    gpg_sign_commands = [line for line in command_log.split('\n')
+                         if 'gpg' in line and '--detach-sign' in line]
+    assert len(gpg_sign_commands) == 0, \
+        f"Expected no GPG signing, but found:\n{chr(10).join(gpg_sign_commands)}"
+
+    # 4. No git push invocation
+    # Note: git status and other preflight calls are expected
+    git_push_commands = [line for line in command_log.split('\n')
+                         if 'git push' in line]
+    assert len(git_push_commands) == 0, \
+        f"Expected no 'git push', but found:\n{chr(10).join(git_push_commands)}"
+
+    # 5. Script does not print successful-completion message
+    assert "Release completed successfully" not in result.stdout, \
+        f"Expected no success message, but stdout contains:\n{result.stdout}"
+    assert "Release completed successfully" not in result.stderr, \
+        f"Expected no success message, but stderr contains:\n{result.stderr}"
+
+def test_failed_gpg_sign_stops_release(tmp_path):
+    """Test that when python3 -m build fails, the script stops and does not proceed."""
+    fail_at = 'gpg-sign'
+    result, command_log = run_release(tmp_path, fail_at)
+
+    # Assertions:
+
+    # 1. Script should return nonzero exit code (twine-check failed)
+    assert result.returncode != 0, \
+        f"Expected nonzero exit code, got {result.returncode}"
+
+    # 2. GPG signing was attempted
+    assert [line for line in command_log.split('\n')
+            if 'gpg' in line and '--detach-sign' in line], \
+        f"Expected 'gpg and --detach-sign' in log, but found:\n{command_log}"
+
+    # 3. No git push invocation
+    # Note: git status and other preflight calls are expected
+    git_push_commands = [line for line in command_log.split('\n')
+                         if 'git push' in line]
+    assert len(git_push_commands) == 0, \
+        f"Expected no 'git push', but found:\n{chr(10).join(git_push_commands)}"
+
+    # 4. Script does not print successful-completion message
+    assert "Release completed successfully" not in result.stdout, \
+        f"Expected no success message, but stdout contains:\n{result.stdout}"
+    assert "Release completed successfully" not in result.stderr, \
+        f"Expected no success message, but stderr contains:\n{result.stderr}"
+
+# def test_failed_twine_upload_stops_release(tmp_path):
+#     """Test that when python3 -m build fails, the script stops and does not proceed."""
+#     fail_at = 'twine-upload'
+#     result, command_log = run_release(tmp_path, fail_at)
+#
+#     # Assertions:
+#
+#     # 1. Script should return nonzero exit code (twine-check failed)
+#     assert result.returncode != 0, \
+#         f"Expected nonzero exit code, got {result.returncode}"
+#
+#     # 2. Twine upload was attempted
+#     assert "python3 -m twine upload" in command_log, \
+#         f"Expected 'python3 -m twine upload' in log, but found:\n{command_log}"
+#
+#     # 3. No git push invocation
+#     # Note: git status and other preflight calls are expected
+#     git_push_commands = [line for line in command_log.split('\n')
+#                          if 'git push' in line]
+#     assert len(git_push_commands) == 0, \
+#         f"Expected no 'git push', but found:\n{chr(10).join(git_push_commands)}"
+#
+#     # 4. Script does not print successful-completion message
+#     assert "Release completed successfully" not in result.stdout, \
+#         f"Expected no success message, but stdout contains:\n{result.stdout}"
+#     assert "Release completed successfully" not in result.stderr, \
+#         f"Expected no success message, but stderr contains:\n{result.stderr}"
+
+
