@@ -33,13 +33,23 @@ LOG_FILE="{log_file}"
 echo "python3 $@" >> "$LOG_FILE"
 
 # Handle version check
-if [[ "$1" == "-c" ]] && [[ "$2" == *"sys.version_info"* ]]; then
+if [[ "$RELEASE_TEST_FAIL" == "python-version" ]]; then
+    if [[ "$1" == "-c" ]] && [[ "$2" == *"sys.version_info"* ]]; then
+        echo "2.7"  # Unsupported version
+        exit 0
+    fi
+elif [[ "$1" == "-c" ]] && [[ "$2" == *"sys.version_info"* ]]; then
     echo "3.11"
     exit 0
 fi
 
 # Handle import checks
-if [[ "$1" == "-c" ]] && [[ "$2" == *"import "* ]]; then
+if [[ "$RELEASE_TEST_FAIL" == "missing-dependencies" ]]; then
+    if [[ "$1" == "-c" ]] && [[ "$2" == *"import "* ]]; then
+        echo "ERROR: Missing dependency" >&2
+        exit 1
+    fi
+elif [[ "$1" == "-c" ]] && [[ "$2" == *"import "* ]]; then
     exit 0
 fi
 
@@ -62,8 +72,16 @@ fi
 
 # Handle -m twine
 if [[ "$RELEASE_TEST_FAIL" == "twine-check" ]]; then
-    if [[ "$1" == "-m" ]] && [[ "$2" == "twine" ]]; then
+    if [[ "$1" == "-m" ]] && [[ "$2" == "twine" ]] && [[ "$3" == "check" ]]; then
         echo "ERROR: twine check error" >&2
+        exit 1
+    fi
+elif [[ "$RELEASE_TEST_FAIL" == "twine-upload" ]]; then
+    if [[ "$1" == "-m" ]] && [[ "$2" == "twine" ]] && [[ "$3" == "check" ]]; then
+        echo "SUCCESS: Twine check passed" >&2
+        exit 0
+    elif [[ "$1" == "-m" ]] && [[ "$2" == "twine" ]] && [[ "$3" == "upload" ]]; then
+        echo "ERROR: Twine upload failed" >&2
         exit 1
     fi
 elif [[ "$RELEASE_TEST_FAIL" == "build" ]]; then
@@ -85,7 +103,7 @@ exit 1
     fake_python.chmod(0o755)
 
 
-def create_fake_git(bin_dir: Path, log_file: Path,test_dir: Path, release_test_fail) -> None:
+def create_fake_git(bin_dir: Path, log_file: Path, test_dir: Path, release_test_fail) -> None:
     """Create a fake git executable that handles status, remote, and push commands."""
 
     fake_git = bin_dir / "git"
@@ -100,8 +118,14 @@ echo "git $@" >> "$LOG_FILE"
 case "$1" in
     status)
         if [[ "$2" == "--porcelain" ]]; then
-            # Return empty output (clean working directory)
-            exit 0
+            if [[ "$RELEASE_TEST_FAIL" == "dirty-tree" ]]; then
+                # Return output indicating uncommitted changes
+                echo " M some-file.py"
+                exit 0
+            else
+                # Return empty output (clean working directory)
+                exit 0
+            fi
         elif [[ "$2" == "--short" ]]; then
             exit 0
         fi
@@ -130,9 +154,17 @@ case "$1" in
         fi
         ;;
     push)
-        # Forbidden operation - fail immediately
-        echo "ERROR: git push should not be called in this test" >&2
-        exit 1
+        if [[ "$RELEASE_TEST_FAIL" == "git-push" ]]; then
+            echo "ERROR: git push failed" >&2
+            exit 1
+        elif [[ "$RELEASE_TEST_FAIL" == "twine-upload" ]] || [[ "$RELEASE_TEST_FAIL" == "gpg-sign" ]] || \
+             [[ "$RELEASE_TEST_FAIL" == "twine-check" ]] || [[ "$RELEASE_TEST_FAIL" == "build" ]]; then
+            # Forbidden operation - fail immediately
+            echo "ERROR: git push should not be called in this test" >&2
+            exit 1
+        else
+            exit 0
+        fi
         ;;
 esac
 
@@ -157,15 +189,22 @@ echo "gpg $@" >> "$LOG_FILE"
 
 # Handle --list-secret-keys (preflight check)
 if [[ "$1" == "--list-secret-keys" ]]; then
-    # Just succeed - key exists
-    exit 0
+    if [[ "$RELEASE_TEST_FAIL" == "missing-gpg-key" ]]; then
+        echo "ERROR: GPG key not found" >&2
+        exit 2
+    else
+        # Just succeed - key exists
+        exit 0
+    fi
 fi
 
 # Handle signing with --detach-sign
-if [[ "$RELEASE_TEST_FAIL" == "twine-check" ]] || [[ "$RELEASE_TEST_FAIL" == "build" ]]; then
+if [[ "$RELEASE_TEST_FAIL" == "twine-check" ]] || [[ "$RELEASE_TEST_FAIL" == "build" ]] || \
+   [[ "$RELEASE_TEST_FAIL" == "missing-dependencies" ]] || [[ "$RELEASE_TEST_FAIL" == "python-version" ]] || \
+   [[ "$RELEASE_TEST_FAIL" == "dirty-tree" ]] || [[ "$RELEASE_TEST_FAIL" == "missing-gpg-key" ]]; then
     if [[ "$2" == "-u" ]] && [[ "$4" == "--detach-sign" ]]; then
         # Forbidden operation - fail immediately
-        echo "ERROR: gpg --detach-sign should not be called in this test (build/twine-check failed)" >&2
+        echo "ERROR: gpg --detach-sign should not be called in this test (preflight failed)" >&2
         exit 1
     fi
 elif [[ "$RELEASE_TEST_FAIL" == "gpg-sign" ]]; then
@@ -174,7 +213,7 @@ elif [[ "$RELEASE_TEST_FAIL" == "gpg-sign" ]]; then
         echo "ERROR: gpg --detach-sign error" >&2
         exit 1
     fi
-else 
+else
     if [[ "$2" == "-u" ]] && [[ "$4" == "--detach-sign" ]]; then
             # Success - sign the file
             echo "SUCCESS: gpg --detach-sign" >&2
@@ -313,7 +352,7 @@ def test_failed_build_stops_release(tmp_path):
 
 
 def test_failed_twine_check_stops_release(tmp_path):
-    """Test that when python3 -m build fails, the script stops and does not proceed."""
+    """Test that when python3 -m twine check fails, the script stops and does not proceed."""
     fail_at = 'twine-check'
     result, command_log = run_release(tmp_path, fail_at)
 
@@ -347,8 +386,9 @@ def test_failed_twine_check_stops_release(tmp_path):
     assert "Release completed successfully" not in result.stderr, \
         f"Expected no success message, but stderr contains:\n{result.stderr}"
 
+
 def test_failed_gpg_sign_stops_release(tmp_path):
-    """Test that when python3 -m build fails, the script stops and does not proceed."""
+    """Test that when gpg sign fails, the script stops and does not proceed."""
     fail_at = 'gpg-sign'
     result, command_log = run_release(tmp_path, fail_at)
 
@@ -376,32 +416,150 @@ def test_failed_gpg_sign_stops_release(tmp_path):
     assert "Release completed successfully" not in result.stderr, \
         f"Expected no success message, but stderr contains:\n{result.stderr}"
 
-# def test_failed_twine_upload_stops_release(tmp_path):
-#     """Test that when python3 -m build fails, the script stops and does not proceed."""
-#     fail_at = 'twine-upload'
-#     result, command_log = run_release(tmp_path, fail_at)
-#
-#     # Assertions:
-#
-#     # 1. Script should return nonzero exit code (twine-check failed)
-#     assert result.returncode != 0, \
-#         f"Expected nonzero exit code, got {result.returncode}"
-#
-#     # 2. Twine upload was attempted
-#     assert "python3 -m twine upload" in command_log, \
-#         f"Expected 'python3 -m twine upload' in log, but found:\n{command_log}"
-#
-#     # 3. No git push invocation
-#     # Note: git status and other preflight calls are expected
-#     git_push_commands = [line for line in command_log.split('\n')
-#                          if 'git push' in line]
-#     assert len(git_push_commands) == 0, \
-#         f"Expected no 'git push', but found:\n{chr(10).join(git_push_commands)}"
-#
-#     # 4. Script does not print successful-completion message
-#     assert "Release completed successfully" not in result.stdout, \
-#         f"Expected no success message, but stdout contains:\n{result.stdout}"
-#     assert "Release completed successfully" not in result.stderr, \
-#         f"Expected no success message, but stderr contains:\n{result.stderr}"
+
+def test_failed_twine_upload_stops_release(tmp_path):
+    """Test that a failed twine upload stops the release and does not push to git."""
+    fail_at = 'twine-upload'
+    result, command_log = run_release(tmp_path, fail_at)
+
+    # Assertions:
+
+    # 1. Script should return nonzero exit code (twine upload failed)
+    assert result.returncode != 0, \
+        f"Expected nonzero exit code, got {result.returncode}"
+
+    # 2. Twine upload was attempted
+    assert "python3 -m twine upload" in command_log, \
+        f"Expected 'python3 -m twine upload' in log, but found:\n{command_log}"
+
+    # 3. No git push invocation
+    git_push_commands = [line for line in command_log.split('\n')
+                         if 'git push' in line]
+    assert len(git_push_commands) == 0, \
+        f"Expected no 'git push', but found:\n{chr(10).join(git_push_commands)}"
+
+    # 4. Script does not print successful-completion message
+    assert "Release completed successfully" not in result.stdout, \
+        f"Expected no success message, but stdout contains:\n{result.stdout}"
+    assert "Release completed successfully" not in result.stderr, \
+        f"Expected no success message, but stderr contains:\n{result.stderr}"
 
 
+def test_missing_dependencies_stops_release(tmp_path):
+    """Test that missing Python dependencies stop the release before version changes."""
+    fail_at = 'missing-dependencies'
+    result, command_log = run_release(tmp_path, fail_at)
+
+    # Assertions:
+
+    # 1. Script should return nonzero exit code (dependency check failed)
+    assert result.returncode != 0, \
+        f"Expected nonzero exit code, got {result.returncode}"
+
+    # 2. Import check was attempted
+    assert "import " in command_log, \
+        f"Expected import check in log, but found:\n{command_log}"
+
+    # 3. No build invocation
+    assert "python3 -m build" not in command_log, \
+        f"Expected no build, but found:\n{command_log}"
+
+    # 4. No bumpversion invocation
+    bumpversion_commands = [line for line in command_log.split('\n')
+                            if 'bumpversion' in line]
+    assert len(bumpversion_commands) == 0, \
+        f"Expected no bumpversion, but found:\n{chr(10).join(bumpversion_commands)}"
+
+    # 5. Script does not print successful-completion message
+    assert "Release completed successfully" not in result.stdout, \
+        f"Expected no success message, but stdout contains:\n{result.stdout}"
+
+
+def test_unsupported_python_version_stops_release(tmp_path):
+    """Test that an unsupported Python version stops the release before version changes."""
+    fail_at = 'python-version'
+    result, command_log = run_release(tmp_path, fail_at)
+
+    # Assertions:
+
+    # 1. Script should return nonzero exit code (version check failed)
+    assert result.returncode != 0, \
+        f"Expected nonzero exit code, got {result.returncode}"
+
+    # 2. Version check was attempted
+    assert "sys.version_info" in command_log, \
+        f"Expected version check in log, but found:\n{command_log}"
+
+    # 3. No build invocation
+    assert "python3 -m build" not in command_log, \
+        f"Expected no build, but found:\n{command_log}"
+
+    # 4. No bumpversion invocation
+    bumpversion_commands = [line for line in command_log.split('\n')
+                            if 'bumpversion' in line]
+    assert len(bumpversion_commands) == 0, \
+        f"Expected no bumpversion, but found:\n{chr(10).join(bumpversion_commands)}"
+
+    # 5. Script does not print successful-completion message
+    assert "Release completed successfully" not in result.stdout, \
+        f"Expected no success message, but stdout contains:\n{result.stdout}"
+
+
+def test_dirty_working_tree_stops_release(tmp_path):
+    """Test that a dirty working tree stops the release before version changes."""
+    fail_at = 'dirty-tree'
+    result, command_log = run_release(tmp_path, fail_at)
+
+    # Assertions:
+
+    # 1. Script should return nonzero exit code (git status check failed)
+    assert result.returncode != 0, \
+        f"Expected nonzero exit code, got {result.returncode}"
+
+    # 2. Git status check was attempted
+    assert "git status" in command_log, \
+        f"Expected 'git status' in log, but found:\n{command_log}"
+
+    # 3. No build invocation
+    assert "python3 -m build" not in command_log, \
+        f"Expected no build, but found:\n{command_log}"
+
+    # 4. No bumpversion invocation
+    bumpversion_commands = [line for line in command_log.split('\n')
+                            if 'bumpversion' in line]
+    assert len(bumpversion_commands) == 0, \
+        f"Expected no bumpversion, but found:\n{chr(10).join(bumpversion_commands)}"
+
+    # 5. Script does not print successful-completion message
+    assert "Release completed successfully" not in result.stdout, \
+        f"Expected no success message, but stdout contains:\n{result.stdout}"
+
+
+def test_missing_gpg_key_stops_release(tmp_path):
+    """Test that a missing GPG key stops the release before version changes."""
+    fail_at = 'missing-gpg-key'
+    result, command_log = run_release(tmp_path, fail_at)
+
+    # Assertions:
+
+    # 1. Script should return nonzero exit code (GPG key check failed)
+    assert result.returncode != 0, \
+        f"Expected nonzero exit code, got {result.returncode}"
+
+    # 2. GPG key check was attempted
+    assert "gpg --list-secret-keys" in command_log, \
+        f"Expected 'gpg --list-secret-keys' in log, but found:\n{command_log}"
+
+    # 3. No build invocation
+    assert "python3 -m build" not in command_log, \
+        f"Expected no build, but found:\n{command_log}"
+
+    # 4. No bumpversion invocation
+    bumpversion_commands = [line for line in command_log.split('\n')
+                            if 'bumpversion' in line]
+    assert len(bumpversion_commands) == 0, \
+        f"Expected no bumpversion, but found:\n{chr(10).join(bumpversion_commands)}"
+
+    # 5. Script does not print successful-completion message
+    assert "Release completed successfully" not in result.stdout, \
+        f"Expected no success message, but stdout contains:\n{result.stdout}"
